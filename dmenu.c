@@ -31,6 +31,7 @@ enum { SchemeNorm, SchemeSel, SchemeOut, SchemeLast }; /* color schemes */
 
 struct item {
 	char *text;
+	char *key;
 	struct item *left, *right;
 	int out;
 };
@@ -45,7 +46,6 @@ static struct item *items = NULL;
 static struct item *matches, *matchend;
 static struct item *prev, *curr, *next, *sel;
 static int mon = -1, screen;
-
 static Atom clip, utf8;
 static Display *dpy;
 static Window root, parentwin, win;
@@ -117,7 +117,7 @@ cistrstr(const char *s, const char *sub)
 static int
 drawitem(struct item *item, int x, int y, int w)
 {
-	if (item == sel)
+	if (item == sel && key_mode == false) 
 		drw_setscheme(drw, scheme[SchemeSel]);
 	else if (item->out)
 		drw_setscheme(drw, scheme[SchemeOut]);
@@ -132,25 +132,30 @@ drawmenu(void)
 {
 	unsigned int curpos;
 	struct item *item;
-	int x = 0, y = 0, w;
+	int x = 0, y = 0, fh = drw->fonts->h, w;
 
 	drw_setscheme(drw, scheme[SchemeNorm]);
 	drw_rect(drw, 0, 0, mw, mh, 1, 1);
 
 	if (prompt && *prompt) {
 		drw_setscheme(drw, scheme[SchemeSel]);
-		x = drw_text(drw, x, 0, promptw, bh, lrpad / 2, prompt, 0);
+		x = drw_text(drw, x, 0, promptw, bh, lrpad/2, prompt, 0);
 	}
-	/* draw input field */
-	w = (lines > 0 || !matches) ? mw - x : inputw;
-	drw_setscheme(drw, scheme[SchemeNorm]);
-	drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
-
-	curpos = TEXTW(text) - TEXTW(&text[cursor]);
-	if ((curpos += lrpad / 2 - 1) < w) {
+	//don't draw the input field if using key mode
+	if (!key_mode == true){
+		/* draw input field */
+		w = (lines > 0 || !matches) ? mw - x : inputw;
 		drw_setscheme(drw, scheme[SchemeNorm]);
-		drw_rect(drw, x + curpos, 2, 2, bh - 4, 1, 0);
+		drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0);
+
+		curpos = TEXTW(text) - TEXTW(&text[cursor]);
+		if ((curpos += lrpad / 2 - 1) < w) {
+			drw_setscheme(drw, scheme[SchemeNorm]);
+			drw_rect(drw, x + curpos, 2 + (bh-fh)/2, 2, fh - 4, 1,0);
+		}
+		x += inputw;
 	}
+	
 
 	if (lines > 0) {
 		/* draw vertical list */
@@ -158,13 +163,12 @@ drawmenu(void)
 			drawitem(item, x, y += bh, mw - x);
 	} else if (matches) {
 		/* draw horizontal list */
-		x += inputw;
 		w = TEXTW("<");
 		if (curr->left) {
 			drw_setscheme(drw, scheme[SchemeNorm]);
 			drw_text(drw, x, 0, w, bh, lrpad / 2, "<", 0);
 		}
-		x += w;
+		x += w/2;
 		for (item = curr; item != next; item = item->right)
 			x = drawitem(item, x, 0, MIN(TEXTW(item->text), mw - x - TEXTW(">")));
 		if (next) {
@@ -223,27 +227,61 @@ match(void)
 	struct item *item, *lprefix, *lsubstr, *prefixend, *substrend;
 
 	strcpy(buf, text);
-	/* separate input text into tokens to be matched individually */
+	/* separate input text into tokens to be dsatched individually */
 	for (s = strtok(buf, " "); s; tokv[tokc - 1] = s, s = strtok(NULL, " "))
 		if (++tokc > tokn && !(tokv = realloc(tokv, ++tokn * sizeof *tokv)))
 			die("cannot realloc %u bytes:", tokn * sizeof *tokv);
 	len = tokc ? strlen(tokv[0]) : 0;
-
+	
+	
 	matches = lprefix = lsubstr = matchend = prefixend = substrend = NULL;
 	textsize = strlen(text) + 1;
 	for (item = items; item && item->text; item++) {
-		for (i = 0; i < tokc; i++)
-			if (!fstrstr(item->text, tokv[i]))
-				break;
-		if (i != tokc) /* not all tokens match */
-			continue;
-		/* exact matches go first, then prefixes, then substrings */
-		if (!tokc || !fstrncmp(text, item->text, textsize))
-			appenditem(item, &matches, &matchend);
-		else if (!fstrncmp(tokv[0], item->text, len))
-			appenditem(item, &lprefix, &prefixend);
-		else
-			appenditem(item, &lsubstr, &substrend);
+		if (key_mode == true){
+			//if character matches a key, return it and exit
+			if (strstr(item->key, text) && strlen(text) != 0){
+			//	printf("match\n");
+			//	printf("text is \"%s\"\n",text);
+			//	printf("text[0] is \"%c\"\n",text[0]);
+			//	printf("buf[0] is \"%c\"\n",buf[1]);
+			//	printf("item->key is \"%s\"\n",item->key);
+				matches=NULL;
+				matchend=NULL;
+				appenditem(item, &matches, &matchend);
+				puts(text);
+				cleanup();
+				exit(0);
+			}
+			// if no match do nothing but keep choices on screen
+			else{
+				appenditem(item, &matches, &matchend);
+				//printf("nomatch\n");
+				//printf("buf is \"%s\"\n",buf);
+				//printf("item->key is \"%s\"\n",item->key);
+			}
+		}
+		else{
+			for (i = 0; i < tokc; i++){
+				if (!fstrstr(item->text, tokv[i]))
+	 				break;
+			}
+			if (i != tokc ) /* not all tokens match */
+				continue;
+			/* exact matches go first, then prefixes, then substrings */
+			if (!tokc || !fstrncmp(text, item->text, textsize))
+				appenditem(item, &matches, &matchend);
+			else if (!fstrncmp(tokv[0], item->text, len))
+				appenditem(item, &lprefix, &prefixend);
+			else
+				appenditem(item, &lsubstr, &substrend);
+			
+		}
+	}
+	// if no matching key is pressed, reset the input and move cursor back to 0
+	if (key_mode == true){
+		text[cursor-1] = '\0';
+		buf[cursor-1] = '\0';
+		cursor=0;
 	}
 	if (lprefix) {
 		if (matches) {
@@ -262,6 +300,7 @@ match(void)
 		matchend = substrend;
 	}
 	curr = sel = matches;
+	
 	calcoffsets();
 }
 
@@ -399,6 +438,8 @@ keypress(XKeyEvent *ev)
 insert:
 		if (!iscntrl(*buf))
 			insert(buf, len);
+		else if (isspace(*buf) )
+			insert(buf, len);
 		break;
 	case XK_Delete:
 		if (text[cursor] == '\0')
@@ -528,20 +569,32 @@ readstdin(void)
 
 	/* read each line from stdin and add it to the item list */
 	for (i = 0; fgets(buf, sizeof buf, stdin); i++) {
+		char *bufp = buf;
 		if (i + 1 >= size / sizeof *items)
 			if (!(items = realloc(items, (size += BUFSIZ))))
 				die("cannot realloc %u bytes:", size);
-		if ((p = strchr(buf, '\n')))
+		if (key_mode == true){
+			if ((p = strchr(bufp, ':'))){
+				*p = '\0';
+				if (!(items[i].key = strdup(bufp)))
+					die("cannot strdup %u bytes:", strlen(bufp) + 1);
+				bufp = p+1;
+				//printf("key is \'%s\'", items[i].key);
+			}
+			
+		}
+		if ((p = strchr(bufp, '\n')))
 			*p = '\0';
-		if (!(items[i].text = strdup(buf)))
-			die("cannot strdup %u bytes:", strlen(buf) + 1);
+		if (!(items[i].text = strdup(bufp)))
+			die("cannot strdup %u bytes:", strlen(bufp) + 1);
 		items[i].out = 0;
-		drw_font_getexts(drw->fonts, buf, strlen(buf), &tmpmax, NULL);
+		drw_font_getexts(drw->fonts, bufp, strlen(bufp), &tmpmax, NULL);
 		if (tmpmax > inputw) {
 			inputw = tmpmax;
 			imax = i;
 		}
 	}
+
 	if (items)
 		items[i].text = NULL;
 	inputw = items ? TEXTW(items[imax].text) : 0;
@@ -610,6 +663,7 @@ setup(void)
 
 	/* calculate menu geometry */
 	bh = drw->fonts->h + 2;
+	bh = MAX(bh,lineheight);	/* make a menu line AT LEAST 'lineheight' tall */	
 	lines = MAX(lines, 0);
 	mh = (lines + 1) * bh;
 #ifdef XINERAMA
@@ -750,6 +804,9 @@ main(int argc, char *argv[])
 		else if (!strcmp(argv[i], "-i")) { /* case-insensitive item matching */
 			fstrncmp = strncasecmp;
 			fstrstr = cistrstr;
+		}
+		else if (!strcmp(argv[i], "-k"))  { /* single key mode */
+			key_mode = true;
 		} else if (i + 1 == argc)
 			usage();
 		/* these options take one argument */
@@ -761,6 +818,10 @@ main(int argc, char *argv[])
 			prompt = argv[++i];
 		else if (!strcmp(argv[i], "-fn"))  /* font or font set */
 			fonts[0] = argv[++i];
+		else if (!strcmp(argv[i], "-h")) { /* minimum height of one menu line */
+			lineheight = atoi(argv[++i]);
+			lineheight = MAX(lineheight,8); /* reasonable default in case of value too small/negative */
+		}
 		else if (!strcmp(argv[i], "-nb"))  /* normal background color */
 			colors[SchemeNorm][ColBg] = argv[++i];
 		else if (!strcmp(argv[i], "-nf"))  /* normal foreground color */
